@@ -1,0 +1,110 @@
+---
+title: "NYPD Shooting Incident Report"
+author: "Gabor Schulz"
+date: "5/19/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+```
+
+## Step 1: Import the project dataset
+
+Data source:
+Shooting incident data recorded in NYC since 2006.
+https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD
+
+```{r load_data}
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+shooting = read_csv(url_in)
+```
+
+## Step 2: Tidy and transform the data
+
+The data contains a date field which is currently stored as a string. We should convert that into a date.
+Also, we should convert categorical columns into factor columns.
+I'm replacing the UNKNOWN values in the PERP_RACE column as this is one of the factors I'm going to analyze in Step 3.
+Finally, we should drop columns we don't need, like the exact latitude and longitude.
+
+```{r tidy_data}
+shooting <- shooting %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+  mutate(BORO = fct_recode(BORO)) %>%
+  mutate(PRECINCT = factor(PRECINCT)) %>%
+  mutate(JURISDICTION_CODE = factor(JURISDICTION_CODE)) %>%
+  mutate(PERP_AGE_GROUP = factor(PERP_AGE_GROUP)) %>%
+  mutate(PERP_SEX = fct_recode(PERP_SEX)) %>%
+  mutate(PERP_RACE = fct_recode(PERP_RACE)) %>% 
+  mutate(VIC_AGE_GROUP = fct_recode(VIC_AGE_GROUP)) %>%
+  mutate(VIC_SEX = fct_recode(VIC_SEX)) %>%
+  mutate(VIC_RACE = fct_recode(VIC_RACE)) %>%
+  select(-c(X_COORD_CD, Y_COORD_CD, Latitude, Longitude, Lon_Lat))
+
+shooting$PERP_RACE[shooting$PERP_RACE == 'UNKNOWN'] <- NA
+summary(shooting)
+```
+There are missing values in several columns:
+1. **JURISDICTION_CODE**: 2 missing values. We could simply drop those 2 rows.
+2. **PERP_AGE_GROUP**: contains two missing values: NA and UNKNOWN. These should be harmonized. If an age analysis is being done, we should drop those rows that do not contain the required data. Alternatively we could try to impute values, which could, however, distort the result.
+
+**PERP_SEX** are **PERP_RACE** similar to **PERP_AGE_GROUP** in that they also have two different unknown values.
+
+## Step 3: Visualizations and Analysis
+
+```{r prepare_for_analysis}
+shootings_per_boro <- shooting %>% group_by(BORO) %>% summarize(cases = n())
+murders_per_boro <- merge(shooting %>% group_by(BORO, STATISTICAL_MURDER_FLAG) %>% summarize(cases = n()), shootings_per_boro, by='BORO', all.x = TRUE) 
+murders_per_boro <- murders_per_boro %>% rename(cases = cases.x, total_cases = cases.y)
+murders_per_boro <- murders_per_boro %>% mutate(pct = round(cases / total_cases * 100, 2))
+
+shootings_per_perp_race <- shooting %>% group_by(PERP_RACE) %>% summarize(cases = n())
+shootings_perp_race_vic_race <- merge(shooting %>% group_by(PERP_RACE, VIC_RACE) %>% summarize(cases = n()), shootings_per_perp_race, by='PERP_RACE', all.x = TRUE)
+shootings_perp_race_vic_race <- shootings_perp_race_vic_race %>% rename(cases = cases.x, total_cases = cases.y)
+shootings_perp_race_vic_race <- shootings_perp_race_vic_race %>% mutate(pct = round(cases / total_cases * 100, 2))
+```
+
+Let's look at the murder vs non-murder shootings per boro first:
+```{r analyze_per_boro}
+murders_per_boro
+```
+
+```{r visualize_per_boro_abs}
+murders_per_boro %>% ggplot(aes(fill=STATISTICAL_MURDER_FLAG, x=BORO, y=cases)) +
+  geom_bar(position="stack", stat="identity", width=0.5) +
+  labs(title='Absolute cases per boro')
+```
+
+```{r visualize_per_boro_rel}
+murders_per_boro %>% ggplot(aes(fill=STATISTICAL_MURDER_FLAG, x=BORO, y=pct)) +
+  geom_bar(position="stack", stat="identity", width=0.5) +
+  labs(title='Relative cases per boro')
+```
+
+It appears that Staten Island had the lowest number of shootings (698), but the highest proportion of murder cases (20.49 %). The highest number of shootings happened in Brooklyn (9722). Manhattan had the lowest proportion of murders (17.53 %).
+
+```{r visualize_per_perp_race}
+shootings_per_perp_race %>% ggplot(aes(fill=PERP_RACE, x='', y=cases)) +
+  geom_bar(position="stack", stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  labs(title='Cases per perpetrator race')
+```
+
+Looking at the race of perpetrators it is immediately visible that there is a huge proportion of unknown values. The 2nd largest group is black, while the smallest one is American Indian/Alaskan native.
+
+## Conclusion and bias identification
+
+There could be several sources of bias, both in the data and the analysis.
+
+1. Sources of bias in the data
+- The way the data is collected may be biased. E.g. there may be more points recorded in certain neighborhoods simply because of more intensive police activity in the area.
+- There is a huge number of incomplete samples, which could make it more difficult to extract meaningful insights from the data
+
+2. Sources of bias in the analysis
+- The person performing the analysis could be influenced by their personal position on firearms, their race, their gender, etc.
+
+In conclusion, this is a challenging data set because of the large number of missing values but also due to the potential political implications of the outcomes. If it's used for taking policy decisions, very thorough data cleaning is required which should involve a careful analysis of the potential effects of the decisions taken. This could best be done in co-operation with subject matter experts.
